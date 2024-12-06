@@ -12,4 +12,6 @@ func Setup(apiGroup *echo.Group){
 		return c.JSON(http.StatusOK, "Hello, World!")
 	})
 	apiGroup.POST("/users", handlers.UserCreate)
+
+	apiGroup.GET("/users/:id", handlers.GetUser)
 }

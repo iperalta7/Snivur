@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"snix-surv/models"
+	"strconv"
 
 	"github.com/labstack/echo"
 )
@@ -25,4 +26,9 @@ func UserCreate(c echo.Context) error{
 	users[newUser.Id] = newUser
 	seq++
 	return c.JSON(http.StatusCreated, newUser)
+}
+
+func GetUser(c echo.Context) error {
+	id, _ := strconv.Atoi(c.Param("id"))
+	return c.JSON(http.StatusOK, users[id])
 }
