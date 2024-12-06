@@ -17,7 +17,10 @@ func UserCreate(c echo.Context) error{
 		Id: seq,
 	}
 	if err := c.Bind(newUser); err != nil {
-		return err
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	if err := c.Validate(newUser); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	users[newUser.Id] = newUser
 	seq++

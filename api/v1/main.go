@@ -7,6 +7,7 @@ import (
 	"snix-surv/routes"
 	"snix-surv/utils"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/labstack/echo"
 )
 
@@ -16,6 +17,7 @@ func main() {
 	utils.Check(err)
 	api_version := path.Base(workingDir)
 	e := echo.New()
+	e.Validator = &utils.CustomValidator{Validator: validator.New()}
 
 	api_group := e.Group("api/" + string(api_version))
 	routes.Setup(api_group)
