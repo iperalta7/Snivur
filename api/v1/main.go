@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/labstack/echo"
+	"github.com/labstack/echo/middleware"
 )
 
 func main() {
@@ -18,6 +19,8 @@ func main() {
 	api_version := path.Base(workingDir)
 	e := echo.New()
 	e.Validator = &utils.CustomValidator{Validator: validator.New()}
+
+	e.Use(middleware.Logger())
 
 	api_group := e.Group("api/" + string(api_version))
 	routes.Setup(api_group)
