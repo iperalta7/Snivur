@@ -5,23 +5,11 @@ import (
 	"log"
 	"net/http"
 	"snivur/v0/shared"
-)
+	"snivur/v0/shared/health"
 
-func apiKeyMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(writer http.ResponseWriter, request *http.Request) {
-		key := request.Header.Get("X-API-Key")
-		if key != "test-secret" { // TODO: better auth
-			err := "Invalid API key"
-			writer.WriteHeader(http.StatusUnauthorized) // Set the status code
-			json.NewEncoder(writer).Encode(shared.LaunchResponse{
-				Status:  "error",
-				Message: err,
-			})
-			return
-		}
-		next(writer, request)
-	}
-}
+	"github.com/go-chi/chi"
+	"github.com/go-chi/chi/middleware"
+)
 
 func launchHandler(writer http.ResponseWriter, request *http.Request) {
 	var req shared.LaunchRequest
@@ -47,14 +35,29 @@ func launchHandler(writer http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("Command finished with error: %v", err)
 		json.NewEncoder(writer).Encode(shared.LaunchResponse{Status: "error", Message: err.Error()})
+	} else {
+		log.Printf("Command finished successfully")
 	}
-	log.Printf("command to finish...")
 
 	json.NewEncoder(writer).Encode(shared.LaunchResponse{Status: "launching", Message: "Server is starting"})
 }
 
 func main() {
-	http.HandleFunc("/launch", apiKeyMiddleware(launchHandler))
-	log.Println("Agent listening on :8000")
-	http.ListenAndServe(":8000", nil)
+	r := chi.NewRouter()
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+	r.Use(middleware.URLFormat)
+	shared.ApiKey = "agent"
+	r.Use(shared.ApiKeyMiddleware)
+
+	// Register routes
+	r.Get("/health", health.HealthCheckHandler)
+	r.Post("/launch", launchHandler)
+
+	log.Println("Agent listening on :8081")
+	log.Println("Agent API Key: ", shared.ApiKey)
+	err := http.ListenAndServe(":8081", r)
+	if err != nil {
+		log.Fatalf("could not start server: %v", err)
+	}
 }

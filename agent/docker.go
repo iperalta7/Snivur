@@ -5,6 +5,10 @@ import (
 	"snivur/v0/shared"
 )
 
+type GameServer interface {
+	Run(req shared.LaunchRequest) *exec.Cmd
+}
+
 type DockerServer struct{}
 
 func (d DockerServer) Run(req shared.LaunchRequest) *exec.Cmd {
