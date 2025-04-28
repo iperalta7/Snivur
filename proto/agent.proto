@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package snivur.v0;
+
+option go_package = "/proto"; // Use the correct Go module path
+
+// Request to start a game server
+message ServerRequest {
+  string name = 1;       // Name of the game server
+  string path = 2;       // Path to the start script or executable
+}
+
+// Response from the agent after starting/stopping a server
+message ServerResponse {
+  string status = 1;     // Status of the operation (e.g., "success", "error")
+  string message = 2;    // Additional message or error description
+}
+
+// Health check request (empty, used to ping the agent)
+message HealthCheckRequest {
+  string server_address = 1; // Add a field for the server's address
+}
+// Health check response (whether the agent is alive)
+message HealthCheckResponse {
+  bool alive = 1;        // True if the agent is alive and responsive, false otherwise
+}
+
+// Request to list servers
+message ListServersRequest {}
+
+message ListServersResponse {
+    repeated Server servers = 1;
+}
+
+// Server struct to represent a server
+message Server {
+  string name = 1;
+  string status = 2;
+  string path = 3;
+}
+
+
+// Service provided by the Agent
+service GameServerManager {
+  // Starts a game server
+  rpc StartServer(ServerRequest) returns (ServerResponse);
+
+  // Stops a game server
+  rpc StopServer(ServerRequest) returns (ServerResponse);
+
+  // Checks if the agent is alive and responsive
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+
+  rpc ListServers (ListServersRequest) returns (ListServersResponse);
+}

@@ -1,60 +1,60 @@
 package main
 
 import (
-	"encoding/json"
-	"log"
-	"net/http"
-	"snivur/v0/shared"
+    "context"
+    "fmt"
+    "google.golang.org/grpc"
+    "google.golang.org/grpc/reflection"
+    "log"
+    "net"
+    pb "snivur/v0/proto"
 )
 
-func apiKeyMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(writer http.ResponseWriter, request *http.Request) {
-		key := request.Header.Get("X-API-Key")
-		if key != "test-secret" { // TODO: better auth
-			err := "Invalid API key"
-			writer.WriteHeader(http.StatusUnauthorized) // Set the status code
-			json.NewEncoder(writer).Encode(shared.LaunchResponse{
-				Status:  "error",
-				Message: err,
-			})
-			return
-		}
-		next(writer, request)
-	}
+type server struct{
+    pb.UnimplementedGameServerManagerServer // Embed the unimplemented server
 }
 
-func launchHandler(writer http.ResponseWriter, request *http.Request) {
-	var req shared.LaunchRequest
-	if err := json.NewDecoder(request.Body).Decode(&req); err != nil {
-		http.Error(writer, "Invalid request", http.StatusBadRequest)
-		return
-	}
+// StartServer starts the game server (this is just a placeholder)
+func (s *server) StartServer(ctx context.Context, req *pb.ServerRequest) (*pb.ServerResponse, error) {
+    // Logic to start the server (e.g., execute a shell command to start the game server)
+    fmt.Printf("Starting server: %s at path: %s\n", req.Name, req.Path)
+    return &pb.ServerResponse{
+        Status:  "success",
+        Message: fmt.Sprintf("Server %s started successfully", req.Name),
+    }, nil
+}
 
-	log.Printf("Launching %s server with config: %v", req.Game, req.Config)
+// StopServer stops the game server (this is just a placeholder)
+func (s *server) StopServer(ctx context.Context, req *pb.ServerRequest) (*pb.ServerResponse, error) {
+    // Logic to stop the server (e.g., terminate the server process)
+    fmt.Printf("Stopping server: %s\n", req.Name)
+    return &pb.ServerResponse{
+        Status:  "success",
+        Message: fmt.Sprintf("Server %s stopped successfully", req.Name),
+    }, nil
+}
 
-	var server GameServer = DockerServer{}
-	cmd := server.Run(req)
-
-	err := cmd.Start()
-	if err != nil {
-		log.Printf("Error: %v", err)
-		json.NewEncoder(writer).Encode(shared.LaunchResponse{Status: "error", Message: err.Error()})
-		return
-	}
-
-	log.Printf("Waiting for command to finish...")
-	err = cmd.Wait()
-	if err != nil {
-		log.Printf("Command finished with error: %v", err)
-		json.NewEncoder(writer).Encode(shared.LaunchResponse{Status: "error", Message: err.Error()})
-	}
-	log.Printf("command to finish...")
-
-	json.NewEncoder(writer).Encode(shared.LaunchResponse{Status: "launching", Message: "Server is starting"})
+// HealthCheck checks if the agent is alive
+func (s *server) HealthCheck(ctx context.Context, req *pb.HealthCheckRequest) (*pb.HealthCheckResponse, error) {
+    return &pb.HealthCheckResponse{
+        Alive: true, // Agent is alive
+    }, nil
 }
 
 func main() {
-	http.HandleFunc("/launch", apiKeyMiddleware(launchHandler))
-	log.Println("Agent listening on :8000")
-	http.ListenAndServe(":8000", nil)
+    lis, err := net.Listen("tcp", ":50051")
+    if err != nil {
+        log.Fatalf("Failed to listen: %v", err)
+    }
+
+    grpcServer := grpc.NewServer()
+    pb.RegisterGameServerManagerServer(grpcServer, &server{})
+
+    // Register reflection service on gRPC server (optional, but useful for debugging)
+    reflection.Register(grpcServer)
+
+    fmt.Println("Agent gRPC server running on :50051")
+    if err := grpcServer.Serve(lis); err != nil {
+        log.Fatalf("Failed to serve: %v", err)
+    }
 }
