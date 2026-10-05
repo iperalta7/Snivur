@@ -239,7 +239,7 @@ func TestRunSweeperSweepsAndStops(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runSweeper(ctx, r, time.Millisecond)
+		runSweeper(ctx, r, NewStore(nil), time.Millisecond)
 	}()
 	deadline := time.Now().Add(5 * time.Second)
 	for mustGet(t, r, "a").Status != shared.AgentOffline {

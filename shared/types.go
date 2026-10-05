@@ -69,11 +69,15 @@ const (
 	StateStopping ServerState = "stopping"
 	StateStopped  ServerState = "stopped"
 	StateFailed   ServerState = "failed"
+	// StateUnknown means the server's agent went offline while the server
+	// was running; the controller cannot see whether it is still alive.
+	StateUnknown ServerState = "unknown"
 )
 
 // Server is the controller's record of a game server.
 type Server struct {
 	ID          string            `json:"id"`
+	AgentID     string            `json:"agent_id"` // agent the server is bound to
 	Name        string            `json:"name"`
 	Game        string            `json:"game"`
 	Config      map[string]string `json:"config"`
@@ -86,9 +90,10 @@ type Server struct {
 
 // CreateServerRequest is the client-facing body for POST /servers.
 type CreateServerRequest struct {
-	Name   string            `json:"name"`
-	Game   string            `json:"game"`
-	Config map[string]string `json:"config"`
+	AgentID string            `json:"agent_id"` // required
+	Name    string            `json:"name"`
+	Game    string            `json:"game"`
+	Config  map[string]string `json:"config"`
 }
 
 // ContainerInfo describes one snivur-managed container as reported by an

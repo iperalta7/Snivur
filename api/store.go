@@ -20,15 +20,21 @@ var (
 	ErrNameConflict = errors.New("server name already in use")
 	// ErrNotFound is returned by Transition for an unknown server ID.
 	ErrNotFound = errors.New("server not found")
+	// ErrStateChanged is returned by TransitionFrom when the server is no
+	// longer in the expected state.
+	ErrStateChanged = errors.New("server state changed")
 )
 
 // transitions lists every allowed (from -> to) move. stopped and failed are
-// terminal and therefore have no entry.
+// terminal and therefore have no entry. unknown is entered only when a
+// running server's agent goes offline (ADR 0004) and is left through
+// reconciliation; it cannot be stopped.
 var transitions = map[shared.ServerState][]shared.ServerState{
 	shared.StatePending:  {shared.StateStarting, shared.StateFailed},
 	shared.StateStarting: {shared.StateRunning, shared.StateFailed},
-	shared.StateRunning:  {shared.StateStopping, shared.StateFailed},
+	shared.StateRunning:  {shared.StateStopping, shared.StateFailed, shared.StateUnknown},
 	shared.StateStopping: {shared.StateStopped, shared.StateFailed},
+	shared.StateUnknown:  {shared.StateRunning, shared.StateFailed},
 }
 
 // canTransition reports whether from -> to is allowed.
@@ -83,6 +89,7 @@ func (s *Store) Create(req shared.CreateServerRequest) (shared.Server, error) {
 	now := s.now()
 	srv := &shared.Server{
 		ID:        shared.NewID(),
+		AgentID:   req.AgentID,
 		Name:      req.Name,
 		Game:      req.Game,
 		Config:    maps.Clone(req.Config),
@@ -125,11 +132,30 @@ func (s *Store) List() []shared.Server {
 // It returns ErrNotFound for an unknown ID and ErrInvalidTransition for a
 // move the state machine forbids; in both cases nothing is changed.
 func (s *Store) Transition(id string, to shared.ServerState, msg string, mutate func(*shared.Server)) (shared.Server, error) {
+	return s.transition(id, "", to, msg, mutate)
+}
+
+// TransitionFrom is Transition with a compare-and-set: if the server's
+// current state is not from, it returns ErrStateChanged and changes
+// nothing.
+func (s *Store) TransitionFrom(id string, from, to shared.ServerState, msg string, mutate func(*shared.Server)) (shared.Server, error) {
+	if from == "" {
+		return shared.Server{}, fmt.Errorf("%w: empty from state", ErrStateChanged)
+	}
+	return s.transition(id, from, to, msg, mutate)
+}
+
+// transition implements Transition and TransitionFrom under the lock. An
+// empty from skips the compare-and-set check.
+func (s *Store) transition(id string, from, to shared.ServerState, msg string, mutate func(*shared.Server)) (shared.Server, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	srv, ok := s.servers[id]
 	if !ok {
 		return shared.Server{}, fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	if from != "" && srv.State != from {
+		return clone(srv), fmt.Errorf("%w: %s is %s, expected %s", ErrStateChanged, id, srv.State, from)
 	}
 	if !canTransition(srv.State, to) {
 		return clone(srv), fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, srv.State, to)

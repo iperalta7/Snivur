@@ -73,12 +73,12 @@ func singleJSON(t *testing.T, body []byte, v any) {
 	}
 }
 
-const validBody = `{"name":"mc1","game":"minecraft","config":{"image":"alpine"}}`
+const validBody = `{"agent_id":"agent-a","name":"mc1","game":"minecraft","config":{"image":"alpine"}}`
 
-func TestCreateServerTrailingSlashAgentURL(t *testing.T) {
+func TestAgentClientTrailingSlashBaseURL(t *testing.T) {
 	fa := newFakeAgent(t, 200, `{}`)
-	c := newHTTPAgentClient(fa.URL+"/", testKey, fa.Client())
-	if _, err := c.Launch(context.Background(), shared.LaunchRequest{ServerID: "s", Name: "mc1", Config: map[string]string{"image": "alpine"}}); err != nil {
+	c := newHTTPAgentClient(testKey, fa.Client())
+	if _, err := c.Launch(context.Background(), fa.URL+"/", shared.LaunchRequest{ServerID: "s", Name: "mc1", Config: map[string]string{"image": "alpine"}}); err != nil {
 		t.Fatal(err)
 	}
 	if hits := fa.Hits(); len(hits) != 1 || hits[0].path != "/launch" {
@@ -101,7 +101,7 @@ func TestCreateServerValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fa := newFakeAgent(t, 200, `{}`)
-			h := newControllerServer(NewStore(time.Now), NewRegistry(nil, HealthThresholds{}), newHTTPAgentClient(fa.URL, testKey, fa.Client()), testKey)
+			h := newControllerServer(NewStore(time.Now), healthyRegistry(fa.URL), newHTTPAgentClient(testKey, fa.Client()), testKey)
 			w := post(t, h, tt.body)
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400", w.Code)
@@ -126,8 +126,8 @@ func TestControllerLoadConfig(t *testing.T) {
 		want    Config
 	}{
 		{"key required", map[string]string{}, true, Config{}},
-		{"defaults", map[string]string{"SNIVUR_AGENT_API_KEY": "k"}, false, Config{Addr: ":8080", AgentURL: "http://localhost:8000", AgentAPIKey: "k"}},
-		{"overrides", map[string]string{"SNIVUR_AGENT_API_KEY": "k", "SNIVUR_CONTROLLER_ADDR": ":1", "SNIVUR_AGENT_URL": "http://a:2"}, false, Config{Addr: ":1", AgentURL: "http://a:2", AgentAPIKey: "k"}},
+		{"defaults", map[string]string{"SNIVUR_AGENT_API_KEY": "k"}, false, Config{Addr: ":8080", AgentAPIKey: "k"}},
+		{"overrides", map[string]string{"SNIVUR_AGENT_API_KEY": "k", "SNIVUR_CONTROLLER_ADDR": ":1"}, false, Config{Addr: ":1", AgentAPIKey: "k"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

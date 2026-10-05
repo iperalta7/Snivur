@@ -13,10 +13,11 @@ func main() {
 		log.Fatalf("controller: config error: %v", err)
 	}
 
-	agents := newHTTPAgentClient(cfg.AgentURL, cfg.AgentAPIKey, newAgentClient())
+	agents := newHTTPAgentClient(cfg.AgentAPIKey, newAgentClient())
 	registry := NewRegistry(time.Now, DefaultHealthThresholds())
-	go runSweeper(context.Background(), registry, sweepInterval)
-	handler := newControllerServer(NewStore(time.Now), registry, agents, cfg.AgentAPIKey)
-	log.Printf("Controller running on %s (agent %s)", cfg.Addr, cfg.AgentURL)
+	store := NewStore(time.Now)
+	go runSweeper(context.Background(), registry, store, sweepInterval)
+	handler := newControllerServer(store, registry, agents, cfg.AgentAPIKey)
+	log.Printf("Controller running on %s", cfg.Addr)
 	log.Fatal(newHTTPServer(cfg.Addr, handler).ListenAndServe())
 }
