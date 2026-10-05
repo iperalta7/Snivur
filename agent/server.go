@@ -4,9 +4,12 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"os"
 	"snivur/v0/shared"
 	"time"
 
@@ -24,21 +27,53 @@ const (
 
 // Config holds the agent's runtime configuration.
 type Config struct {
-	Addr   string // SNIVUR_AGENT_ADDR
-	APIKey string // SNIVUR_AGENT_API_KEY
+	Addr              string        // SNIVUR_AGENT_ADDR
+	APIKey            string        // SNIVUR_AGENT_API_KEY
+	AgentID           string        // SNIVUR_AGENT_ID, default os.Hostname()
+	ControllerURL     string        // SNIVUR_CONTROLLER_URL, empty disables heartbeats
+	AdvertiseURL      string        // SNIVUR_AGENT_ADVERTISE_URL
+	HeartbeatInterval time.Duration // SNIVUR_HEARTBEAT_INTERVAL, default 10s
 }
 
 // loadConfig reads configuration using getenv (normally os.Getenv).
 func loadConfig(getenv func(string) string) (Config, error) {
 	cfg := Config{
-		Addr:   getenv("SNIVUR_AGENT_ADDR"),
-		APIKey: getenv("SNIVUR_AGENT_API_KEY"),
+		Addr:          getenv("SNIVUR_AGENT_ADDR"),
+		APIKey:        getenv("SNIVUR_AGENT_API_KEY"),
+		AgentID:       getenv("SNIVUR_AGENT_ID"),
+		ControllerURL: getenv("SNIVUR_CONTROLLER_URL"),
+		AdvertiseURL:  getenv("SNIVUR_AGENT_ADVERTISE_URL"),
 	}
 	if cfg.Addr == "" {
 		cfg.Addr = ":8081"
 	}
 	if cfg.APIKey == "" {
 		return Config{}, errors.New("SNIVUR_AGENT_API_KEY is required")
+	}
+	if cfg.AgentID == "" {
+		host, err := os.Hostname()
+		if err != nil || host == "" {
+			return Config{}, fmt.Errorf("SNIVUR_AGENT_ID is unset and hostname is unavailable: %v", err)
+		}
+		cfg.AgentID = host
+	}
+	if cfg.AdvertiseURL == "" {
+		_, port, err := net.SplitHostPort(cfg.Addr)
+		if err != nil {
+			return Config{}, fmt.Errorf("SNIVUR_AGENT_ADVERTISE_URL is unset and SNIVUR_AGENT_ADDR %q has no port: %v", cfg.Addr, err)
+		}
+		cfg.AdvertiseURL = "http://localhost:" + port
+	}
+	cfg.HeartbeatInterval = defaultHeartbeatInterval
+	if v := getenv("SNIVUR_HEARTBEAT_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("SNIVUR_HEARTBEAT_INTERVAL: %v", err)
+		}
+		if d <= 0 {
+			return Config{}, fmt.Errorf("SNIVUR_HEARTBEAT_INTERVAL must be positive, got %s", v)
+		}
+		cfg.HeartbeatInterval = d
 	}
 	return cfg, nil
 }

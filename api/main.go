@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"time"
@@ -16,7 +17,9 @@ func main() {
 	}
 
 	agents := newHTTPAgentClient(cfg.AgentURL, cfg.AgentAPIKey, newAgentClient())
-	handler := newControllerServer(NewStore(time.Now), agents, cfg.ControllerAPIKey)
+	registry := NewRegistry(time.Now, DefaultHealthThresholds())
+	go runSweeper(context.Background(), registry, sweepInterval)
+	handler := newControllerServer(NewStore(time.Now), registry, agents, cfg.AgentAPIKey, cfg.ControllerAPIKey)
 	log.Printf("Controller running on %s (agent %s)", cfg.Addr, cfg.AgentURL)
 	r := chi.NewRouter()
 	r.Use(middleware.Logger, middleware.Recoverer)

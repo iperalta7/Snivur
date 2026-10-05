@@ -101,7 +101,7 @@ func TestCreateServerValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fa := newFakeAgent(t, 200, `{}`)
-			h := withControllerKey(newControllerServer(NewStore(time.Now), newHTTPAgentClient(fa.URL, testKey, fa.Client()), testControllerKey))
+			h := withControllerKey(newControllerServer(NewStore(time.Now), NewRegistry(nil, HealthThresholds{}), newHTTPAgentClient(fa.URL, testKey, fa.Client()), testKey, testControllerKey))
 			w := post(t, h, tt.body)
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400", w.Code)

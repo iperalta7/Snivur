@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -20,13 +21,15 @@ func withControllerKey(h http.Handler) http.Handler {
 }
 
 func TestControllerRequiresAPIKey(t *testing.T) {
-	h := newControllerServer(NewStore(nil), nil, testControllerKey)
+	h := newControllerServer(NewStore(nil), NewRegistry(nil, HealthThresholds{}), nil, testKey, testControllerKey)
 	routes := []struct{ method, path string }{
 		{http.MethodGet, "/health"},
 		{http.MethodPost, "/servers"},
 		{http.MethodGet, "/servers"},
 		{http.MethodGet, "/servers/abc"},
 		{http.MethodPost, "/servers/abc/stop"},
+		{http.MethodGet, "/agents"},
+		{http.MethodGet, "/agents/abc"},
 	}
 	keys := []struct {
 		name, key string
@@ -54,10 +57,32 @@ func TestControllerRequiresAPIKey(t *testing.T) {
 }
 
 func TestControllerHealth(t *testing.T) {
-	h := withControllerKey(newControllerServer(NewStore(nil), nil, testControllerKey))
+	h := withControllerKey(newControllerServer(NewStore(nil), NewRegistry(nil, HealthThresholds{}), nil, testKey, testControllerKey))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
+	}
+}
+
+func TestHeartbeatRequiresAgentKeyNotControllerKey(t *testing.T) {
+	h := newControllerServer(NewStore(nil), NewRegistry(nil, HealthThresholds{}), nil, testKey, testControllerKey)
+	body := `{"agent_id":"a","address":"http://a:8081"}`
+	for _, tc := range []struct {
+		name, key string
+		want      int
+	}{
+		{"controller key rejected", testControllerKey, http.StatusUnauthorized},
+		{"agent key accepted", testKey, http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/agents/heartbeat", strings.NewReader(body))
+			req.Header.Set("X-API-Key", tc.key)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d", w.Code, tc.want)
+			}
+		})
 	}
 }

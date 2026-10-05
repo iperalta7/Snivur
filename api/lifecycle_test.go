@@ -176,7 +176,7 @@ func assertError(t *testing.T, w *httptest.ResponseRecorder, status int) {
 // container_id set.
 func TestCreateServerAsyncLifecycle(t *testing.T) {
 	agent := newChanAgent()
-	h := withControllerKey(newControllerServer(NewStore(time.Now), agent, testControllerKey))
+	h := withControllerKey(newControllerServer(NewStore(time.Now), NewRegistry(nil, HealthThresholds{}), agent, testKey, testControllerKey))
 
 	start := time.Now()
 	w := doReq(h, http.MethodPost, "/servers", createBody("mc1"))
@@ -239,7 +239,7 @@ func TestCreateServerAsyncLifecycle(t *testing.T) {
 // AC2 (hardening): a client that disconnects does not cancel the launch.
 func TestCreateServerLaunchSurvivesClientCancel(t *testing.T) {
 	agent := newChanAgent()
-	h := withControllerKey(newControllerServer(NewStore(time.Now), agent, testControllerKey))
+	h := withControllerKey(newControllerServer(NewStore(time.Now), NewRegistry(nil, HealthThresholds{}), agent, testKey, testControllerKey))
 	ctx, cancel := context.WithCancel(context.Background())
 	r := httptest.NewRequest(http.MethodPost, "/servers", strings.NewReader(createBody("mc1"))).WithContext(ctx)
 	w := httptest.NewRecorder()
@@ -258,7 +258,7 @@ func TestCreateServerLaunchSurvivesClientCancel(t *testing.T) {
 // AC3: a launch error ends in failed with the error in message.
 func TestCreateServerLaunchFailure(t *testing.T) {
 	agent := newChanAgent()
-	h := withControllerKey(newControllerServer(NewStore(time.Now), agent, testControllerKey))
+	h := withControllerKey(newControllerServer(NewStore(time.Now), NewRegistry(nil, HealthThresholds{}), agent, testKey, testControllerKey))
 	srv := mustCreate(t, h, "mc1")
 	recv(t, agent.launches, "Launch call")
 	send(t, agent.launchResults, launchResult{err: errors.New("agent returned 500: docker run: pull access denied")}, "launch result")
@@ -275,7 +275,7 @@ func TestCreateServerLaunchFailure(t *testing.T) {
 // becomes failed with the agent's error message.
 func TestCreateServerLaunchFailureViaHTTPAgent(t *testing.T) {
 	fa := newFakeAgent(t, http.StatusInternalServerError, `{"error":"docker run: no such image"}`)
-	h := withControllerKey(newControllerServer(NewStore(time.Now), newHTTPAgentClient(fa.URL, testKey, fa.Client()), testControllerKey))
+	h := withControllerKey(newControllerServer(NewStore(time.Now), NewRegistry(nil, HealthThresholds{}), newHTTPAgentClient(fa.URL, testKey, fa.Client()), testKey, testControllerKey))
 	srv := mustCreate(t, h, "mc1")
 	got := waitState(t, h, srv.ID, shared.StateFailed)
 	if !strings.Contains(got.Message, "no such image") {
@@ -295,7 +295,7 @@ func runningServer(t *testing.T, h http.Handler, agent *chanAgent, name string) 
 // AC4: stop on running -> 202 stopping -> stopped.
 func TestStopRunningServer(t *testing.T) {
 	agent := newChanAgent()
-	h := withControllerKey(newControllerServer(NewStore(time.Now), agent, testControllerKey))
+	h := withControllerKey(newControllerServer(NewStore(time.Now), NewRegistry(nil, HealthThresholds{}), agent, testKey, testControllerKey))
 	srv := runningServer(t, h, agent, "mc1")
 
 	start := time.Now()
@@ -337,7 +337,7 @@ func TestStopNonRunningConflict(t *testing.T) {
 			st := NewStore(nil)
 			srv := serverIn(t, st, "mc1", s)
 			agent := newChanAgent()
-			h := withControllerKey(newControllerServer(st, agent, testControllerKey))
+			h := withControllerKey(newControllerServer(st, NewRegistry(nil, HealthThresholds{}), agent, testKey, testControllerKey))
 			w := doReq(h, http.MethodPost, "/servers/"+srv.ID+"/stop", "")
 			assertError(t, w, http.StatusConflict)
 			if got, _ := st.Get(srv.ID); got.State != s {
@@ -351,7 +351,7 @@ func TestStopNonRunningConflict(t *testing.T) {
 		})
 	}
 	t.Run("unknown id", func(t *testing.T) {
-		h := withControllerKey(newControllerServer(NewStore(nil), newChanAgent(), testControllerKey))
+		h := withControllerKey(newControllerServer(NewStore(nil), NewRegistry(nil, HealthThresholds{}), newChanAgent(), testKey, testControllerKey))
 		assertError(t, doReq(h, http.MethodPost, "/servers/nope/stop", ""), http.StatusNotFound)
 	})
 }
@@ -376,7 +376,7 @@ func TestStopAgent404EndsStopped(t *testing.T) {
 		}
 	}))
 	defer agentSrv.Close()
-	h := withControllerKey(newControllerServer(NewStore(time.Now), newHTTPAgentClient(agentSrv.URL, testKey, agentSrv.Client()), testControllerKey))
+	h := withControllerKey(newControllerServer(NewStore(time.Now), NewRegistry(nil, HealthThresholds{}), newHTTPAgentClient(agentSrv.URL, testKey, agentSrv.Client()), testKey, testControllerKey))
 	srv := mustCreate(t, h, "mc1")
 	waitState(t, h, srv.ID, shared.StateRunning)
 	if w := doReq(h, http.MethodPost, "/servers/"+srv.ID+"/stop", ""); w.Code != http.StatusAccepted {
@@ -394,7 +394,7 @@ func TestStopAgent404EndsStopped(t *testing.T) {
 // AC4: an agent error during stop ends in failed with the message.
 func TestStopAgentErrorEndsFailed(t *testing.T) {
 	agent := newChanAgent()
-	h := withControllerKey(newControllerServer(NewStore(time.Now), agent, testControllerKey))
+	h := withControllerKey(newControllerServer(NewStore(time.Now), NewRegistry(nil, HealthThresholds{}), agent, testKey, testControllerKey))
 	srv := runningServer(t, h, agent, "mc1")
 	doReq(h, http.MethodPost, "/servers/"+srv.ID+"/stop", "")
 	recv(t, agent.stops, "Stop call")
@@ -408,7 +408,7 @@ func TestStopAgentErrorEndsFailed(t *testing.T) {
 // AC5: same name as a non-terminal server -> 409; reuse after stopped succeeds.
 func TestCreateNameConflictAndReuse(t *testing.T) {
 	agent := newChanAgent()
-	h := withControllerKey(newControllerServer(NewStore(time.Now), agent, testControllerKey))
+	h := withControllerKey(newControllerServer(NewStore(time.Now), NewRegistry(nil, HealthThresholds{}), agent, testKey, testControllerKey))
 
 	first := mustCreate(t, h, "mc1")
 	assertError(t, doReq(h, http.MethodPost, "/servers", createBody("mc1")), http.StatusConflict) // pending
@@ -439,7 +439,7 @@ func TestCreateNameConflictAndReuse(t *testing.T) {
 
 func TestListAndGetEndpoints(t *testing.T) {
 	agent := &instantAgent{}
-	h := withControllerKey(newControllerServer(NewStore(time.Now), agent, testControllerKey))
+	h := withControllerKey(newControllerServer(NewStore(time.Now), NewRegistry(nil, HealthThresholds{}), agent, testKey, testControllerKey))
 
 	w := doReq(h, http.MethodGet, "/servers", "")
 	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != "[]" {
@@ -463,7 +463,7 @@ func TestListAndGetEndpoints(t *testing.T) {
 func TestConcurrentCreateStopList(t *testing.T) {
 	agent := &instantAgent{}
 	st := NewStore(time.Now)
-	h := withControllerKey(newControllerServer(st, agent, testControllerKey))
+	h := withControllerKey(newControllerServer(st, NewRegistry(nil, HealthThresholds{}), agent, testKey, testControllerKey))
 
 	const lifecycles = 40
 	const listers = 20
@@ -589,7 +589,7 @@ func TestControllerBodyTooLarge(t *testing.T) {
 		t.Errorf("maxBodyBytes = %d, want 1 MiB", maxBodyBytes)
 	}
 	agent := &instantAgent{}
-	h := withControllerKey(newControllerServer(NewStore(nil), agent, testControllerKey))
+	h := withControllerKey(newControllerServer(NewStore(nil), NewRegistry(nil, HealthThresholds{}), agent, testKey, testControllerKey))
 	big := strings.Repeat("a", 1<<20)
 	cases := map[string]string{
 		"oversized string":           `{"name":"mc1","game":"` + big + `","config":{"image":"alpine"}}`,
