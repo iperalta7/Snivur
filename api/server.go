@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -64,20 +65,78 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 }
 
 type controllerServer struct {
-	store  *Store
-	agents AgentClient
+	store    *Store
+	registry *Registry
+	agents   AgentClient
+	apiKey   string // shared key agents present on POST /agents/heartbeat
 }
 
 // newControllerServer builds the controller's HTTP handler. Server state
-// lives in store; lifecycle work is sent to agents in the background.
-func newControllerServer(store *Store, agents AgentClient) http.Handler {
-	s := &controllerServer{store: store, agents: agents}
+// lives in store and agent health in registry; lifecycle work is sent to
+// agents in the background. apiKey authenticates agent heartbeats. It starts
+// no goroutines; run runSweeper separately to age agent health.
+func newControllerServer(store *Store, registry *Registry, agents AgentClient, apiKey string) http.Handler {
+	s := &controllerServer{store: store, registry: registry, agents: agents, apiKey: apiKey}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /servers", s.createServer)
 	mux.HandleFunc("GET /servers", s.listServers)
 	mux.HandleFunc("GET /servers/{id}", s.getServer)
 	mux.HandleFunc("POST /servers/{id}/stop", s.stopServer)
+	mux.Handle("POST /agents/heartbeat", s.requireAPIKey(http.HandlerFunc(s.heartbeat)))
+	mux.HandleFunc("GET /agents", s.listAgents)
+	mux.HandleFunc("GET /agents/{id}", s.getAgent)
 	return mux
+}
+
+// requireAPIKey rejects requests whose X-API-Key does not match apiKey,
+// using a constant-time comparison. An empty configured key rejects all.
+func (s *controllerServer) requireAPIKey(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.Header.Get("X-API-Key")
+		if key == "" || s.apiKey == "" || subtle.ConstantTimeCompare([]byte(key), []byte(s.apiKey)) != 1 {
+			writeError(w, http.StatusUnauthorized, "invalid API key")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *controllerServer) heartbeat(w http.ResponseWriter, r *http.Request) {
+	var hb shared.Heartbeat
+	if status, err := decodeJSON(w, r, &hb); err != nil {
+		writeError(w, status, err.Error())
+		return
+	}
+	if hb.AgentID == "" {
+		writeError(w, http.StatusBadRequest, "agent_id is required")
+		return
+	}
+	if hb.Address == "" {
+		writeError(w, http.StatusBadRequest, "address is required")
+		return
+	}
+	prev, known := s.registry.Get(hb.AgentID)
+	s.registry.Upsert(hb)
+	switch {
+	case !known:
+		log.Printf("agent %s registered (address %s, version %s)", hb.AgentID, hb.Address, hb.Version)
+	case prev.Status != shared.AgentHealthy:
+		log.Printf("agent %s: %s -> %s", hb.AgentID, prev.Status, shared.AgentHealthy)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *controllerServer) listAgents(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.registry.List())
+}
+
+func (s *controllerServer) getAgent(w http.ResponseWriter, r *http.Request) {
+	a, ok := s.registry.Get(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
 }
 
 func (s *controllerServer) createServer(w http.ResponseWriter, r *http.Request) {

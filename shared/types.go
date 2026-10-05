@@ -90,3 +90,46 @@ type CreateServerRequest struct {
 	Game   string            `json:"game"`
 	Config map[string]string `json:"config"`
 }
+
+// ContainerInfo describes one snivur-managed container as reported by an
+// agent.
+type ContainerInfo struct {
+	ServerID    string `json:"server_id"`
+	ContainerID string `json:"container_id"`
+	State       string `json:"state"` // docker state, e.g. "running", "exited"
+}
+
+// Heartbeat is pushed periodically from an agent to the controller.
+type Heartbeat struct {
+	AgentID    string          `json:"agent_id"`
+	Hostname   string          `json:"hostname"`
+	Address    string          `json:"address"` // base URL the controller uses to reach this agent
+	Version    string          `json:"version"`
+	Containers []ContainerInfo `json:"containers"`
+	// ContainersError is set when the agent could not list its containers.
+	// Containers is then empty but MUST NOT be read as "no containers".
+	ContainersError string    `json:"containers_error,omitempty"`
+	SentAt          time.Time `json:"sent_at"`
+}
+
+// AgentStatus is the controller's view of an agent's health.
+type AgentStatus string
+
+const (
+	AgentHealthy   AgentStatus = "healthy"
+	AgentUnhealthy AgentStatus = "unhealthy"
+	AgentOffline   AgentStatus = "offline"
+)
+
+// Agent is the controller's record of an agent, built from heartbeats.
+type Agent struct {
+	ID         string          `json:"id"`
+	Hostname   string          `json:"hostname"`
+	Address    string          `json:"address"`
+	Version    string          `json:"version"`
+	Status     AgentStatus     `json:"status"`
+	LastSeen   time.Time       `json:"last_seen"` // controller clock, not SentAt
+	Containers []ContainerInfo `json:"containers"`
+	// ContainersError is the last heartbeat's ContainersError, if any.
+	ContainersError string `json:"containers_error,omitempty"`
+}
