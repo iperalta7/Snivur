@@ -4,12 +4,22 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"snivur/v0/shared"
+	"time"
+
 	"snivur/v0/shared/health"
 
 	"github.com/go-chi/chi/v5"
+)
+
+const (
+	// maxBodyBytes caps every JSON request body.
+	maxBodyBytes = 1 << 20
+	// readHeaderTimeout bounds how long a client may take to send headers.
+	readHeaderTimeout = 10 * time.Second
 )
 
 // Config holds the agent's runtime configuration.
@@ -33,6 +43,11 @@ func loadConfig(getenv func(string) string) (Config, error) {
 	return cfg, nil
 }
 
+// newHTTPServer wraps handler in an http.Server with header timeouts set.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: readHeaderTimeout}
+}
+
 type agentServer struct {
 	cfg     Config
 	runtime Runtime
@@ -45,6 +60,7 @@ func newAgentServer(cfg Config, rt Runtime) http.Handler {
 	r.Use(s.requireAPIKey)
 	r.Get("/health", health.HealthCheckHandler)
 	r.Post("/launch", s.launch)
+	r.Post("/servers/{id}/stop", s.stop)
 	return r
 }
 
@@ -61,8 +77,8 @@ func (s *agentServer) requireAPIKey(next http.Handler) http.Handler {
 
 func (s *agentServer) launch(w http.ResponseWriter, r *http.Request) {
 	var req shared.LaunchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+	if status, err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, status, err.Error())
 		return
 	}
 	if req.ServerID == "" {
@@ -83,6 +99,41 @@ func (s *agentServer) launch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, shared.LaunchResponse{ServerID: req.ServerID, ContainerID: containerID})
+}
+
+func (s *agentServer) stop(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	log.Printf("stopping server %s", id)
+	err := s.runtime.Stop(r.Context(), id)
+	switch {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, ErrNotFound):
+		writeError(w, http.StatusNotFound, "no container for server "+id)
+	default:
+		log.Printf("stop %s failed: %v", id, err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
+}
+
+// decodeJSON decodes a size-limited JSON body into v. On failure it returns
+// the HTTP status to use: 413 for an oversized body, 400 otherwise.
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) (int, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	err := json.NewDecoder(r.Body).Decode(v)
+	if err == nil {
+		// Drain the rest so an oversized body is rejected even when a
+		// complete JSON value appears within the limit.
+		_, err = io.Copy(io.Discard, r.Body)
+		if err == nil {
+			return 0, nil
+		}
+	}
+	var mbe *http.MaxBytesError
+	if errors.As(err, &mbe) {
+		return http.StatusRequestEntityTooLarge, errors.New("request body too large")
+	}
+	return http.StatusBadRequest, errors.New("invalid JSON: " + err.Error())
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

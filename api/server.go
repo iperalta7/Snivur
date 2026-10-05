@@ -1,24 +1,35 @@
 package main
 
 import (
-	"bytes"
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
 	"log"
 	"net/http"
+	"time"
+
 	"snivur/v0/shared"
 	"snivur/v0/shared/health"
-	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 )
 
-// agentTimeout bounds controller->agent calls; docker run -d still pulls
-// images synchronously, so this is generous.
-const agentTimeout = 5 * time.Minute
+const (
+	// agentTimeout is a backstop on every controller->agent HTTP call;
+	// per-operation contexts below are the primary bound.
+	agentTimeout = 5 * time.Minute
+	// launchTimeout bounds a background launch (docker run -d still pulls
+	// images synchronously).
+	launchTimeout = 5 * time.Minute
+	// stopTimeout bounds a background stop.
+	stopTimeout = 1 * time.Minute
+	// maxBodyBytes caps every JSON request body.
+	maxBodyBytes = 1 << 20
+	// readHeaderTimeout bounds how long a client may take to send headers.
+	readHeaderTimeout = 10 * time.Second
+)
 
 // Config holds the controller's runtime configuration.
 type Config struct {
@@ -61,26 +72,28 @@ func newAgentClient() *http.Client {
 	return &http.Client{Timeout: agentTimeout}
 }
 
-// createServerRequest is the client-facing body for POST /servers.
-type createServerRequest struct {
-	Name   string            `json:"name"`
-	Game   string            `json:"game"`
-	Config map[string]string `json:"config"`
+// newHTTPServer wraps handler in an http.Server with header timeouts set.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: readHeaderTimeout}
 }
 
 type controllerServer struct {
-	cfg    Config
-	client *http.Client
+	store  *Store
+	agents AgentClient
 }
 
-// newControllerServer builds the controller's HTTP handler. Requests are
-// forwarded to cfg.AgentURL using client.
-func newControllerServer(cfg Config, client *http.Client) http.Handler {
-	s := &controllerServer{cfg: cfg, client: client}
+// newControllerServer builds the controller's HTTP handler. Server state
+// lives in store; lifecycle work is sent to agents in the background. Every
+// route requires controllerKey.
+func newControllerServer(store *Store, agents AgentClient, controllerKey string) http.Handler {
+	s := &controllerServer{store: store, agents: agents}
 	r := chi.NewRouter()
-	r.Use(requireAPIKey(cfg.ControllerAPIKey))
+	r.Use(requireAPIKey(controllerKey))
 	r.Get("/health", health.HealthCheckHandler)
 	r.Post("/servers", s.createServer)
+	r.Get("/servers", s.listServers)
+	r.Get("/servers/{id}", s.getServer)
+	r.Post("/servers/{id}/stop", s.stopServer)
 	return r
 }
 
@@ -100,55 +113,126 @@ func requireAPIKey(key string) func(http.Handler) http.Handler {
 }
 
 func (s *controllerServer) createServer(w http.ResponseWriter, r *http.Request) {
-	var body createServerRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+	var body shared.CreateServerRequest
+	if status, err := decodeJSON(w, r, &body); err != nil {
+		writeError(w, status, err.Error())
 		return
 	}
-
-	req := shared.LaunchRequest{
-		ServerID: shared.NewID(),
-		Name:     body.Name,
-		Game:     body.Game,
-		Config:   body.Config,
-	}
-	if err := shared.ValidateLaunch(req); err != nil {
+	if err := shared.ValidateLaunch(shared.LaunchRequest{Name: body.Name, Game: body.Game, Config: body.Config}); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	payload, err := json.Marshal(req)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "encode agent request: "+err.Error())
+	srv, err := s.store.Create(body)
+	if errors.Is(err, ErrNameConflict) {
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	url := strings.TrimRight(s.cfg.AgentURL, "/") + "/launch"
-	agentReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "build agent request: "+err.Error())
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	agentReq.Header.Set("Content-Type", "application/json")
-	agentReq.Header.Set("X-API-Key", s.cfg.AgentAPIKey)
 
-	resp, err := s.client.Do(agentReq)
-	if err != nil {
-		log.Printf("contact agent for %s: %v", req.ServerID, err)
-		writeError(w, http.StatusBadGateway, "failed to contact agent: "+err.Error())
+	w.Header().Set("Location", "/servers/"+srv.ID)
+	writeJSON(w, http.StatusAccepted, srv)
+	go s.launch(srv)
+}
+
+// launch drives a pending server to running (or failed). It runs on a
+// background context so a disconnecting client cannot cancel it.
+func (s *controllerServer) launch(srv shared.Server) {
+	if _, err := s.store.Transition(srv.ID, shared.StateStarting, "", nil); err != nil {
+		log.Printf("launch %s: %v", srv.ID, err)
 		return
 	}
-	defer resp.Body.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), launchTimeout)
+	defer cancel()
 
-	// Pass the agent's status and body straight through.
-	ct := resp.Header.Get("Content-Type")
-	if ct == "" {
-		ct = "application/json"
+	resp, err := s.agents.Launch(ctx, shared.LaunchRequest{
+		ServerID: srv.ID,
+		Name:     srv.Name,
+		Game:     srv.Game,
+		Config:   srv.Config, // srv is the store's copy; safe to hand off
+	})
+	if err != nil {
+		log.Printf("launch %s failed: %v", srv.ID, err)
+		s.transitionOrLog(srv.ID, shared.StateFailed, err.Error(), nil)
+		return
 	}
-	w.Header().Set("Content-Type", ct)
-	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		log.Printf("relay agent response for %s: %v", req.ServerID, err)
+	s.transitionOrLog(srv.ID, shared.StateRunning, "", func(p *shared.Server) {
+		p.ContainerID = resp.ContainerID
+	})
+}
+
+func (s *controllerServer) listServers(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.store.List())
+}
+
+func (s *controllerServer) getServer(w http.ResponseWriter, r *http.Request) {
+	srv, ok := s.store.Get(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
 	}
+	writeJSON(w, http.StatusOK, srv)
+}
+
+func (s *controllerServer) stopServer(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	// running -> stopping is the only legal way into stopping, so the
+	// store's transition check enforces "only when running" atomically.
+	srv, err := s.store.Transition(id, shared.StateStopping, "", nil)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	case errors.Is(err, ErrInvalidTransition):
+		writeError(w, http.StatusConflict, "server is "+string(srv.State)+", not running")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, srv)
+	go s.stop(id)
+}
+
+// stop drives a stopping server to stopped (or failed).
+func (s *controllerServer) stop(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+	defer cancel()
+	if err := s.agents.Stop(ctx, id); err != nil {
+		log.Printf("stop %s failed: %v", id, err)
+		s.transitionOrLog(id, shared.StateFailed, err.Error(), nil)
+		return
+	}
+	s.transitionOrLog(id, shared.StateStopped, "", nil)
+}
+
+func (s *controllerServer) transitionOrLog(id string, to shared.ServerState, msg string, mutate func(*shared.Server)) {
+	if _, err := s.store.Transition(id, to, msg, mutate); err != nil {
+		log.Printf("server %s -> %s: %v", id, to, err)
+	}
+}
+
+// decodeJSON decodes a size-limited JSON body into v. On failure it returns
+// the HTTP status to use: 413 for an oversized body, 400 otherwise.
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) (int, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	err := json.NewDecoder(r.Body).Decode(v)
+	if err == nil {
+		// Drain the rest so an oversized body is rejected even when a
+		// complete JSON value appears within the limit.
+		_, err = io.Copy(io.Discard, r.Body)
+		if err == nil {
+			return 0, nil
+		}
+	}
+	var mbe *http.MaxBytesError
+	if errors.As(err, &mbe) {
+		return http.StatusRequestEntityTooLarge, errors.New("request body too large")
+	}
+	return http.StatusBadRequest, errors.New("invalid JSON: " + err.Error())
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
