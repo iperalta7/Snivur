@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os/exec"
 	"snivur/v0/shared"
 	"strings"
@@ -18,6 +19,9 @@ var ErrNotFound = errors.New("container not found")
 type Runtime interface {
 	Start(ctx context.Context, req shared.LaunchRequest) (containerID string, err error)
 	Stop(ctx context.Context, serverID string) error
+	// List returns every container carrying the snivur.server_id label,
+	// in any state.
+	List(ctx context.Context) ([]shared.ContainerInfo, error)
 }
 
 // CommandRunner executes a command and returns combined stdout/stderr.
@@ -63,4 +67,45 @@ func (d DockerRuntime) Stop(ctx context.Context, serverID string) error {
 		return fmt.Errorf("docker stop: %w: %s", err, bytes.TrimSpace(out))
 	}
 	return nil
+}
+
+// listFormat is the docker ps --format template used by List. It is passed
+// as a single argv element; no shell is involved.
+const listFormat = `{{.ID}}\t{{.Label "snivur.server_id"}}\t{{.State}}`
+
+// List reports every container labelled snivur.server_id, including stopped
+// ones. It never returns a nil slice on success.
+func (d DockerRuntime) List(ctx context.Context) ([]shared.ContainerInfo, error) {
+	out, err := d.Run(ctx, "docker", "ps", "-a", "--filter", "label=snivur.server_id", "--format", listFormat)
+	if err != nil {
+		return nil, fmt.Errorf("docker ps: %w: %s", err, bytes.TrimSpace(out))
+	}
+	return parseContainerList(out), nil
+}
+
+// parseContainerList parses "ID\tSERVER_ID\tSTATE" lines. Blank lines are
+// skipped; malformed lines (wrong field count or an empty field) are logged
+// and skipped.
+func parseContainerList(out []byte) []shared.ContainerInfo {
+	infos := []shared.ContainerInfo{}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) != 3 {
+			log.Printf("docker ps: skipping malformed line %q", line)
+			continue
+		}
+		for i := range fields {
+			fields[i] = strings.TrimSpace(fields[i])
+		}
+		if fields[0] == "" || fields[1] == "" || fields[2] == "" {
+			log.Printf("docker ps: skipping malformed line %q", line)
+			continue
+		}
+		infos = append(infos, shared.ContainerInfo{ContainerID: fields[0], ServerID: fields[1], State: fields[2]})
+	}
+	return infos
 }
