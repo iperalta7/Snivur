@@ -2,8 +2,8 @@ package main
 
 import (
 	"log"
-	"net/http"
 	"os"
+	"time"
 )
 
 func main() {
@@ -12,7 +12,8 @@ func main() {
 		log.Fatalf("controller: config error: %v", err)
 	}
 
-	handler := newControllerServer(cfg, newAgentClient())
+	agents := newHTTPAgentClient(cfg.AgentURL, cfg.AgentAPIKey, newAgentClient())
+	handler := newControllerServer(NewStore(time.Now), agents)
 	log.Printf("Controller running on %s (agent %s)", cfg.Addr, cfg.AgentURL)
-	log.Fatal(http.ListenAndServe(cfg.Addr, handler))
+	log.Fatal(newHTTPServer(cfg.Addr, handler).ListenAndServe())
 }

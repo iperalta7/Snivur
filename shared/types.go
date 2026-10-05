@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -56,4 +57,36 @@ func ValidateLaunch(req LaunchRequest) error {
 		return fmt.Errorf("invalid image %q: must not contain whitespace", image)
 	}
 	return nil
+}
+
+// ServerState is the lifecycle state of a server tracked by the controller.
+type ServerState string
+
+const (
+	StatePending  ServerState = "pending"
+	StateStarting ServerState = "starting"
+	StateRunning  ServerState = "running"
+	StateStopping ServerState = "stopping"
+	StateStopped  ServerState = "stopped"
+	StateFailed   ServerState = "failed"
+)
+
+// Server is the controller's record of a game server.
+type Server struct {
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Game        string            `json:"game"`
+	Config      map[string]string `json:"config"`
+	State       ServerState       `json:"state"`
+	Message     string            `json:"message,omitempty"` // last error / reason
+	ContainerID string            `json:"container_id,omitempty"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
+}
+
+// CreateServerRequest is the client-facing body for POST /servers.
+type CreateServerRequest struct {
+	Name   string            `json:"name"`
+	Game   string            `json:"game"`
+	Config map[string]string `json:"config"`
 }

@@ -2,7 +2,6 @@ package main
 
 import (
 	"log"
-	"net/http"
 	"os"
 )
 
@@ -14,5 +13,5 @@ func main() {
 
 	handler := newAgentServer(cfg, DockerRuntime{Run: ExecRunner})
 	log.Printf("Agent listening on %s", cfg.Addr)
-	log.Fatal(http.ListenAndServe(cfg.Addr, handler))
+	log.Fatal(newHTTPServer(cfg.Addr, handler).ListenAndServe())
 }
