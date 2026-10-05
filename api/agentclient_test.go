@@ -51,8 +51,8 @@ func TestHTTPAgentClientLaunch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv, rec := stubAgent(t, tt.status, tt.body)
-			c := newHTTPAgentClient(srv.URL, testKey, srv.Client())
-			resp, err := c.Launch(context.Background(), req)
+			c := newHTTPAgentClient(testKey, srv.Client())
+			resp, err := c.Launch(context.Background(), srv.URL, req)
 			if rec.method != http.MethodPost || rec.path != "/launch" {
 				t.Errorf("request = %s %s, want POST /launch", rec.method, rec.path)
 			}
@@ -103,8 +103,8 @@ func TestHTTPAgentClientStop(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv, rec := stubAgent(t, tt.status, tt.body)
-			c := newHTTPAgentClient(srv.URL+"/", testKey, srv.Client())
-			err := c.Stop(context.Background(), "sid1")
+			c := newHTTPAgentClient(testKey, srv.Client())
+			err := c.Stop(context.Background(), srv.URL+"/", "sid1")
 			if rec.method != http.MethodPost || rec.path != "/servers/sid1/stop" {
 				t.Errorf("request = %s %s, want POST /servers/sid1/stop", rec.method, rec.path)
 			}
@@ -126,8 +126,8 @@ func TestHTTPAgentClientStop(t *testing.T) {
 
 func TestHTTPAgentClientStopEscapesID(t *testing.T) {
 	srv, rec := stubAgent(t, 204, "")
-	c := newHTTPAgentClient(srv.URL, testKey, srv.Client())
-	if err := c.Stop(context.Background(), "a/../b"); err != nil {
+	c := newHTTPAgentClient(testKey, srv.Client())
+	if err := c.Stop(context.Background(), srv.URL, "a/../b"); err != nil {
 		t.Fatal(err)
 	}
 	if rec.rawPath != "/servers/a%2F..%2Fb/stop" {
@@ -139,11 +139,11 @@ func TestHTTPAgentClientUnreachable(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	url := srv.URL
 	srv.Close()
-	c := newHTTPAgentClient(url, testKey, nil)
-	if err := c.Stop(context.Background(), "x"); err == nil {
+	c := newHTTPAgentClient(testKey, nil)
+	if err := c.Stop(context.Background(), url, "x"); err == nil {
 		t.Error("Stop on closed server: nil error")
 	}
-	if _, err := c.Launch(context.Background(), shared.LaunchRequest{}); err == nil {
+	if _, err := c.Launch(context.Background(), url, shared.LaunchRequest{}); err == nil {
 		t.Error("Launch on closed server: nil error")
 	}
 }
@@ -160,8 +160,8 @@ func TestHTTPAgentClientHonorsContext(t *testing.T) {
 	defer close(block)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	c := newHTTPAgentClient(srv.URL, testKey, srv.Client())
-	if err := c.Stop(ctx, "x"); err == nil {
+	c := newHTTPAgentClient(testKey, srv.Client())
+	if err := c.Stop(ctx, srv.URL, "x"); err == nil {
 		t.Error("Stop with canceled ctx: nil error")
 	}
 }

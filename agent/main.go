@@ -19,6 +19,10 @@ func main() {
 		log.Fatalf("agent: config error: %v", err)
 	}
 
+	if msg := advertiseWarning(os.Getenv); msg != "" {
+		log.Printf("agent: WARNING: %s", msg)
+	}
+
 	rt := DockerRuntime{Run: ExecRunner}
 	if cfg.ControllerURL == "" {
 		log.Printf("agent: WARNING: SNIVUR_CONTROLLER_URL is not set; heartbeats are disabled")

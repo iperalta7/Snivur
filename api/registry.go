@@ -149,9 +149,9 @@ func (r *Registry) Sweep() []StatusChange {
 	return changes
 }
 
-// runSweeper calls reg.Sweep every interval and logs each status change
-// until ctx is cancelled.
-func runSweeper(ctx context.Context, reg *Registry, interval time.Duration) {
+// runSweeper calls reg.Sweep every interval and passes the changes to
+// handleStatusChanges until ctx is cancelled.
+func runSweeper(ctx context.Context, reg *Registry, store *Store, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -159,9 +159,29 @@ func runSweeper(ctx context.Context, reg *Registry, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			for _, c := range reg.Sweep() {
-				log.Printf("agent %s: %s -> %s", c.AgentID, c.From, c.To)
+			handleStatusChanges(reg.Sweep(), store)
+		}
+	}
+}
+
+// handleStatusChanges logs each agent status change and, for every agent
+// that went offline, moves its running servers to unknown. A server that
+// changed state concurrently is logged and skipped.
+func handleStatusChanges(changes []StatusChange, store *Store) {
+	for _, c := range changes {
+		log.Printf("agent %s: %s -> %s", c.AgentID, c.From, c.To)
+		if c.To != shared.AgentOffline {
+			continue
+		}
+		for _, srv := range store.List() {
+			if srv.AgentID != c.AgentID || srv.State != shared.StateRunning {
+				continue
 			}
+			if _, err := store.TransitionFrom(srv.ID, shared.StateRunning, shared.StateUnknown, "agent offline", nil); err != nil {
+				log.Printf("agent %s offline: server %s -> %s: %v (ignored)", c.AgentID, srv.ID, shared.StateUnknown, err)
+				continue
+			}
+			log.Printf("agent %s offline: server %s -> %s", c.AgentID, srv.ID, shared.StateUnknown)
 		}
 	}
 }

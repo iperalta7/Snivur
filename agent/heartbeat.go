@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -140,4 +142,30 @@ func (h *Heartbeater) send(ctx context.Context, client *http.Client, hb shared.H
 		return fmt.Errorf("controller returned %d: %s", resp.StatusCode, bytes.TrimSpace(body))
 	}
 	return nil
+}
+
+// advertiseWarning returns a warning when SNIVUR_AGENT_ADVERTISE_URL is
+// unset (so the agent advertises http://localhost:<port>) but
+// SNIVUR_CONTROLLER_URL points at a non-loopback host, which therefore
+// cannot reach the agent. It returns "" when there is nothing to warn about,
+// including when heartbeats are disabled.
+func advertiseWarning(getenv func(string) string) string {
+	controller := getenv("SNIVUR_CONTROLLER_URL")
+	if getenv("SNIVUR_AGENT_ADVERTISE_URL") != "" || controller == "" {
+		return ""
+	}
+	if u, err := url.Parse(controller); err == nil && isLoopbackHost(u.Hostname()) {
+		return ""
+	}
+	return "SNIVUR_AGENT_ADVERTISE_URL is unset, so this agent advertises a localhost address, " +
+		"which the controller at " + controller + " cannot reach; set SNIVUR_AGENT_ADVERTISE_URL"
+}
+
+// isLoopbackHost reports whether host is "localhost" or a loopback IP.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
