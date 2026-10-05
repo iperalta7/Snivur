@@ -20,10 +20,13 @@ func withControllerKey(h http.Handler) http.Handler {
 }
 
 func TestControllerRequiresAPIKey(t *testing.T) {
-	h := newControllerServer(Config{AgentURL: "http://unused", AgentAPIKey: testKey, ControllerAPIKey: testControllerKey}, http.DefaultClient)
+	h := newControllerServer(NewStore(nil), nil, testControllerKey)
 	routes := []struct{ method, path string }{
 		{http.MethodGet, "/health"},
 		{http.MethodPost, "/servers"},
+		{http.MethodGet, "/servers"},
+		{http.MethodGet, "/servers/abc"},
+		{http.MethodPost, "/servers/abc/stop"},
 	}
 	keys := []struct {
 		name, key string
@@ -51,7 +54,7 @@ func TestControllerRequiresAPIKey(t *testing.T) {
 }
 
 func TestControllerHealth(t *testing.T) {
-	h := withControllerKey(newControllerServer(Config{AgentAPIKey: testKey, ControllerAPIKey: testControllerKey}, http.DefaultClient))
+	h := withControllerKey(newControllerServer(NewStore(nil), nil, testControllerKey))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", nil))
 	if w.Code != http.StatusOK {

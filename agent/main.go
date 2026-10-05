@@ -2,7 +2,6 @@ package main
 
 import (
 	"log"
-	"net/http"
 	"os"
 
 	"github.com/go-chi/chi/v5"
@@ -20,5 +19,5 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger, middleware.Recoverer)
 	r.Mount("/", handler)
-	log.Fatal(http.ListenAndServe(cfg.Addr, r))
+	log.Fatal(newHTTPServer(cfg.Addr, r).ListenAndServe())
 }
